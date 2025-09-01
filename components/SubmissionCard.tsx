@@ -4,6 +4,8 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 
+const MAX_DESC = 500
+
 type Props = {
   id: string
   imageUrl?: string
@@ -27,13 +29,11 @@ export default function SubmissionCard({
   const [deleting, setDeleting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  console.log('[SubmissionCard] HARD_DELETE_BUILD v2')
-
   const onSave = async () => {
     setError(null)
     const trimmed = text.trim()
     if (!trimmed) { setError('Description cannot be empty.'); return }
-    if (trimmed.length > 2000) { setError('Max 2000 characters.'); return }
+    if (trimmed.length > MAX_DESC) { setError(`Max ${MAX_DESC} characters.`); return }
 
     setSaving(true)
     try {
@@ -50,8 +50,8 @@ export default function SubmissionCard({
       }
       setIsEditing(false)
       router.refresh()
-    } catch (e: any) {
-      setError(e?.message || 'Update failed')
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Update failed')
     } finally {
       setSaving(false)
     }
@@ -72,8 +72,8 @@ export default function SubmissionCard({
         throw new Error(msg)
       }
       router.refresh()
-    } catch (e: any) {
-      setError(e?.message || 'Delete failed')
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Delete failed')
     } finally {
       setDeleting(false)
     }
@@ -108,9 +108,9 @@ export default function SubmissionCard({
                 className="border rounded-xl p-3 min-h-28"
                 value={text}
                 onChange={(e) => setText(e.target.value)}
-                maxLength={2000}
+                maxLength={MAX_DESC}
               />
-              <div className="text-sm opacity-70">{text.length}/2000</div>
+              <div className="text-sm opacity-70">{text.length}/{MAX_DESC}</div>
               <div className="flex gap-2">
                 <button
                   onClick={onSave}
