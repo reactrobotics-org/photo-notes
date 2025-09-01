@@ -1,0 +1,7 @@
+{
+  "version": 3,
+  "sources": [],
+  "sections": [
+    {"offset": {"line": 4, "column": 0}, "map": {"version":3,"sources":["file:///C:/Users/DaleCrowder/photo-notes/app/layout.tsx"],"sourcesContent":["import './globals.css'\nimport Header from '@/components/Header'\n\nexport default function RootLayout({ children }: { children: React.ReactNode }) {\n  return (\n    <html lang=\"en\">\n      <body>\n        <Header />\n        <div className=\"max-w-3xl mx-auto\">{children}</div>\n      </body>\n    </html>\n  )\n}\n"],"names":[],"mappings":";;;;;;;;;;;;;AAGe,SAAS,WAAW,EAAE,QAAQ,EAAiC;IAC5E,qBACE,8OAAC;QAAK,MAAK;kBACT,cAAA,8OAAC;;8BACC,8OAAC;;;;;8BACD,8OAAC;oBAAI,WAAU;8BAAqB;;;;;;;;;;;;;;;;;AAI5C","debugId":null}},
+    {"offset": {"line": 51, "column": 0}, "map": {"version":3,"sources":["file:///C:/Users/DaleCrowder/photo-notes/node_modules/next/src/server/route-modules/app-page/vendored/rsc/react-jsx-dev-runtime.ts"],"sourcesContent":["module.exports = (\n  require('../../module.compiled') as typeof import('../../module.compiled')\n).vendored['react-rsc']!.ReactJsxDevRuntime\n"],"names":["module","exports","require","vendored","ReactJsxDevRuntime"],"mappings":"AAAAA,OAAOC,OAAO,GACZC,QAAQ,4HACRC,QAAQ,CAAC,YAAY,CAAEC,kBAAkB","ignoreList":[0],"debugId":null}}]
+}

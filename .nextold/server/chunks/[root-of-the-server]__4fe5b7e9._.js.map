@@ -1,0 +1,7 @@
+{
+  "version": 3,
+  "sources": [],
+  "sections": [
+    {"offset": {"line": 3, "column": 0}, "map": {"version":3,"sources":[],"names":[],"mappings":"","debugId":null}},
+    {"offset": {"line": 103, "column": 0}, "map": {"version":3,"sources":["file:///C:/Users/DaleCrowder/photo-notes/app/auth/google/route.ts"],"sourcesContent":["// app/auth/google/route.ts\r\nimport { NextResponse } from 'next/server'\r\nimport { cookies } from 'next/headers'\r\nimport { createRouteHandlerClient } from '@supabase/auth-helpers-nextjs'\r\n\r\nexport async function GET(request: Request) {\r\n  const supabase = createRouteHandlerClient({ cookies })\r\n  const origin = new URL(request.url).origin\r\n  const { data, error } = await supabase.auth.signInWithOAuth({\r\n    provider: 'google',\r\n    options: { redirectTo: `${origin}/auth/callback` }\r\n  })\r\n  if (error) {\r\n    return new NextResponse(`OAuth init failed: ${error.message}`, { status: 500 })\r\n  }\r\n  // data.url is the Google/Supabase authorize URL\r\n  return NextResponse.redirect(data.url)\r\n}\r\n"],"names":[],"mappings":"AAAA,2BAA2B;;;;;AAC3B;AACA;AACA;;;;AAEO,eAAe,IAAI,OAAgB;IACxC,MAAM,WAAW,IAAA,sMAAwB,EAAC;QAAE,SAAA,4IAAO;IAAC;IACpD,MAAM,SAAS,IAAI,IAAI,QAAQ,GAAG,EAAE,MAAM;IAC1C,MAAM,EAAE,IAAI,EAAE,KAAK,EAAE,GAAG,MAAM,SAAS,IAAI,CAAC,eAAe,CAAC;QAC1D,UAAU;QACV,SAAS;YAAE,YAAY,GAAG,OAAO,cAAc,CAAC;QAAC;IACnD;IACA,IAAI,OAAO;QACT,OAAO,IAAI,gJAAY,CAAC,CAAC,mBAAmB,EAAE,MAAM,OAAO,EAAE,EAAE;YAAE,QAAQ;QAAI;IAC/E;IACA,gDAAgD;IAChD,OAAO,gJAAY,CAAC,QAAQ,CAAC,KAAK,GAAG;AACvC","debugId":null}}]
+}
