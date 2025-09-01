@@ -1,6 +1,6 @@
+// lib/supabaseServer.ts
 import { cookies } from 'next/headers'
 import { createServerComponentClient } from '@supabase/auth-helpers-nextjs'
-import type { SupabaseClient } from '@supabase/supabase-js'
 
-export const supabaseServer = (): SupabaseClient =>
-  createServerComponentClient({ cookies })
+// Let the helper infer the correct SupabaseClient type to avoid schema mismatch.
+export const supabaseServer = () => createServerComponentClient({ cookies })
