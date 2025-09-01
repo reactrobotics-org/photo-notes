@@ -1,322 +1,186 @@
 // components/NewSubmissionForm.tsx
 'use client'
 
-import { useEffect, useMemo, useState, type FormEvent } from 'react'
-import { useRouter } from 'next/navigation'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { supabaseBrowser } from '@/lib/supabaseClient'
+import { useRouter } from 'next/navigation'
 
-/** ---- Tunables for compression ---- */
-const MAX_DIMENSION = 1920;          // px: longest side after resize
-const TARGET_MAX_BYTES = 1_500_000;  // ~1.5MB target size
-const START_QUALITY = 0.85;          // initial quality for compression
-const MIN_QUALITY = 0.5;             // lowest we’ll go on quality
-const SCALE_STEP = 0.85;             // if still too big, scale image down by this factor and retry
-const MAX_ITERATIONS = 8;            // safety cap for compression loops
-
-export default function NewSubmissionForm({ userId: _userId }: { userId: string }) {
-  const router = useRouter()
+export default function NewSubmissionForm() {
   const supabase = supabaseBrowser()
+  const router = useRouter()
 
   const [file, setFile] = useState<File | null>(null)
-  const [desc, setDesc] = useState('')
-  const [loading, setLoading] = useState(false)
+  const [fileName, setFileName] = useState<string>('')
+  const [description, setDescription] = useState<string>('')
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  // If session disappears, bounce back to /
-  useEffect(() => {
-    const check = async () => {
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) router.replace('/')
-    }
-    check()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  const inputRef = useRef<HTMLInputElement | null>(null)
 
-  // Preview URL for the chosen file
-  const previewUrl = useMemo(() => (file ? URL.createObjectURL(file) : null), [file])
+  // Create/cleanup a local preview
   useEffect(() => {
-    return () => {
-      if (previewUrl) URL.revokeObjectURL(previewUrl)
-    }
-  }, [previewUrl])
+    if (!file) { setPreviewUrl(null); return }
+    const url = URL.createObjectURL(file)
+    setPreviewUrl(url)
+    return () => URL.revokeObjectURL(url)
+  }, [file])
 
-  const onFileChange = (f: File | null) => {
-    setError(null)
-    if (!f) { setFile(null); return }
-    if (!f.type.startsWith('image/')) { setError('Please choose an image.'); setFile(null); return }
-    // Let very large originals through — we’ll compress them below.
-    if (f.size > 40 * 1024 * 1024) { setError('Image too large (max 40 MB).'); setFile(null); return }
-    setFile(f)
+  const canSubmit = useMemo(() => {
+    return !!file && description.trim().length > 0 && !saving
+  }, [file, description, saving])
+
+  const onPickFile = () => {
+    inputRef.current?.click()
   }
 
-  const handleSubmit = async (e: FormEvent) => {
+  const onFileChange: React.ChangeEventHandler<HTMLInputElement> = (e) => {
+    setError(null)
+    const f = e.target.files?.[0] || null
+    setFile(f)
+    setFileName(f ? f.name : '')
+  }
+
+  const onSubmit: React.FormEventHandler<HTMLFormElement> = async (e) => {
     e.preventDefault()
     setError(null)
 
-    if (!file) { setError('Please select a photo.'); return }
-    const trimmed = desc.trim()
-    if (!trimmed) { setError('Please write a short description.'); return }
-    if (trimmed.length > 2000) { setError('Description is too long (max 2000 chars).'); return }
+    if (!file) { setError('Please choose a photo.'); return }
+    const trimmed = description.trim()
+    if (!trimmed) { setError('Please add a short description.'); return }
+    if (trimmed.length > 2000) { setError('Max 2000 characters.'); return }
 
-    setLoading(true)
+    setSaving(true)
     try {
-      // Confirm session (helps avoid RLS issues)
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) { setError('You are not signed in.'); router.replace('/'); return }
+      // Ensure we have a user
+      const { data: { user }, error: authErr } = await supabase.auth.getUser()
+      if (authErr) throw new Error(authErr.message)
+      if (!user) { window.location.href = '/(auth)/login'; return }
 
-      // 1) Resize + compress on client
-      const processed = await resizeAndCompress(file, {
-        maxDimension: MAX_DIMENSION,
-        targetMaxBytes: TARGET_MAX_BYTES,
-        startQuality: START_QUALITY,
-        minQuality: MIN_QUALITY,
-        scaleStep: SCALE_STEP,
-        maxIterations: MAX_ITERATIONS,
-      })
-
-      // Name & type for upload
-      const ext = processed.ext // 'webp' or 'jpg'
-      const uploadFile = new File([processed.blob], `upload.${ext}`, { type: processed.mime })
-
-      // 2) Build Storage key like: <userId>/<uuid>.<ext>
+      // Build a user-scoped key to satisfy Storage RLS
+      const ext = (file.name.split('.').pop() || 'jpg').toLowerCase()
       const key = `${user.id}/${crypto.randomUUID()}.${ext}`
-      console.log('[NewSubmissionForm] Uploading to key:', key, 'size:', uploadFile.size)
 
-      // 3) Upload to private bucket 'photos'
-      const { error: upErr } = await supabase
-        .storage.from('photos')
-        .upload(key, uploadFile, {
+      const { error: upErr } = await supabase.storage
+        .from('photos')
+        .upload(key, file, {
           cacheControl: '3600',
           upsert: false,
-          contentType: uploadFile.type,
+          contentType: file.type || 'image/jpeg',
         })
-      if (upErr) {
-        console.error('[NewSubmissionForm] upload error:', upErr)
-        throw new Error(upErr.message)
-      }
 
-      // 4) Insert DB row via server API (ensures cookies/session are used server-side)
+      if (upErr) throw new Error(upErr.message)
+
+      // Create DB row
       const res = await fetch('/api/submissions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ image_path: key, description: trimmed }),
       })
-      const bodyText = await res.text()
-      console.log('[NewSubmissionForm] /api/submissions status:', res.status, 'body:', bodyText)
       if (!res.ok) {
-        let msg = 'Insert failed'
-        try { msg = JSON.parse(bodyText).error || msg } catch {}
-        throw new Error(msg)
+        const t = await res.text().catch(() => '')
+        try {
+          const j = JSON.parse(t) as { error?: string }
+          throw new Error(j.error || 'Insert failed')
+        } catch {
+          throw new Error(t || 'Insert failed')
+        }
       }
 
-      router.replace('/my')
-    } catch (err: any) {
-      setError(err?.message || 'Something went wrong.')
+      router.push('/my')
+      router.refresh()
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Something went wrong'
+      setError(msg)
     } finally {
-      setLoading(false)
+      setSaving(false)
     }
   }
 
   return (
-    <main className="p-6 max-w-3xl mx-auto">
-      <h1 className="text-xl font-bold mb-4">New Submission</h1>
+    <form onSubmit={onSubmit} className="grid gap-5">
+      {/* File picker */}
+      <div className="grid gap-2">
+        <label className="text-sm font-semibold">Photo</label>
 
-      <form onSubmit={handleSubmit} className="grid gap-4">
-        <div className="grid gap-2">
-          <label className="font-medium">Photo</label>
-          <input
-            type="file"
-            accept="image/*"
-            capture="environment"
-            onChange={(e) => onFileChange(e.target.files?.[0] ?? null)}
-          />
-          {previewUrl ? (
-            <img src={previewUrl} alt="preview" className="mt-2 max-h-80 rounded-lg border" />
-          ) : null}
-          <p className="text-sm opacity-70">
-            We’ll resize large images to {MAX_DIMENSION}px and compress to ~{Math.round(TARGET_MAX_BYTES / 1024 / 1024 * 10) / 10} MB.
-          </p>
-        </div>
+        {/* Hidden native input */}
+        <input
+          ref={inputRef}
+          id="photo-input"
+          type="file"
+          accept="image/*"
+          capture="environment"
+          className="sr-only"
+          onChange={onFileChange}
+        />
 
-        <div className="grid gap-2">
-          <label htmlFor="desc" className="font-medium">Description</label>
-          <textarea
-            id="desc"
-            className="border rounded-xl p-3 min-h-28"
-            placeholder="Write a few sentences about the photo…"
-            value={desc}
-            onChange={(e) => setDesc(e.target.value)}
-            maxLength={2000}
-          />
-          <div className="text-sm opacity-70">{desc.length}/2000</div>
-        </div>
-
-        {error ? <p className="text-red-600">{error}</p> : null}
-
+        {/* Visible “button” for choosing a file */}
         <div className="flex items-center gap-3">
-          <button type="submit" disabled={loading} className="border rounded-xl px-4 py-2">
-            {loading ? 'Saving…' : 'Save'}
+          <button
+            type="button"
+            onClick={onPickFile}
+            className="inline-flex items-center gap-2 rounded-xl border border-neutral-300 dark:border-neutral-700 px-3 py-2 font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          >
+            {/* simple icon */}
+            <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true" fill="currentColor">
+              <path d="M20 17.5A3.5 3.5 0 1 1 13 17.5 3.5 3.5 0 0 1 20 17.5ZM16.75 2a2.75 2.75 0 0 1 2.694 2.248l.04.252H21a2 2 0 0 1 1.995 1.85L23 6.5V17a3 3 0 0 1-2.824 2.995L20 20H6a3 3 0 0 1-2.995-2.824L3 17V6.5a2 2 0 0 1 1.85-1.995L5 4.5h1.516a2.75 2.75 0 0 1 2.494-2.495L9.75 2h7ZM12 7.75a3.75 3.75 0 1 0 0 7.5 3.75 3.75 0 0 0 0-7.5Z"/>
+            </svg>
+            Choose Photo
           </button>
-          <button type="button" onClick={() => router.back()} className="border rounded-xl px-4 py-2">
-            Cancel
-          </button>
+
+          {/* Selected file name */}
+          <span className="text-sm opacity-90 truncate max-w-[60ch]">
+            {fileName || 'No file chosen'}
+          </span>
         </div>
-      </form>
-    </main>
+
+        {/* Preview (if selected) */}
+        {previewUrl && (
+          <div className="mt-2">
+            <img
+              src={previewUrl}
+              alt="Preview"
+              className="w-full max-w-md rounded-xl border border-neutral-200 dark:border-neutral-700 object-cover"
+            />
+          </div>
+        )}
+      </div>
+
+      {/* Description */}
+      <div className="grid gap-2">
+        <label htmlFor="desc" className="text-sm font-semibold">Description</label>
+        <textarea
+          id="desc"
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+          maxLength={2000}
+          placeholder="Write a few sentences describing the photo…"
+          className="border border-neutral-300 dark:border-neutral-700 rounded-xl p-3 min-h-28 bg-white dark:bg-neutral-900 text-neutral-900 dark:text-neutral-100"
+        />
+        <div className="text-xs opacity-70">{description.length}/2000</div>
+      </div>
+
+      {/* Errors */}
+      {error && (
+        <p className="text-red-600 dark:text-red-400 text-sm">{error}</p>
+      )}
+
+      {/* Submit */}
+      <div className="flex gap-3">
+        <button
+          type="submit"
+          disabled={!canSubmit}
+          className="rounded-xl border border-neutral-300 dark:border-neutral-700 px-4 py-2 font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
+        >
+          {saving ? 'Saving…' : 'Save'}
+        </button>
+        <a
+          href="/my"
+          className="rounded-xl border border-neutral-300 dark:border-neutral-700 px-4 py-2"
+        >
+          Cancel
+        </a>
+      </div>
+    </form>
   )
-}
-
-/* ======================= Helpers: resize & compress ======================= */
-
-type CompressOptions = {
-  maxDimension: number
-  targetMaxBytes: number
-  startQuality: number
-  minQuality: number
-  scaleStep: number
-  maxIterations: number
-}
-
-type ProcessedImage = {
-  blob: Blob
-  mime: 'image/webp' | 'image/jpeg'
-  ext: 'webp' | 'jpg'
-  width: number
-  height: number
-}
-
-/**
- * Resize the image to fit within maxDimension, then compress to WEBP (fallback JPEG),
- * iteratively reducing quality and/or scale until <= targetMaxBytes or limits reached.
- */
-async function resizeAndCompress(file: File, opts: CompressOptions): Promise<ProcessedImage> {
-  // 1) Decode
-  const imgData = await decodeImage(file)
-
-  // 2) Initial target size based on maxDimension
-  let targetW = imgData.width
-  let targetH = imgData.height
-  const longest = Math.max(targetW, targetH)
-  if (longest > opts.maxDimension) {
-    const scale = opts.maxDimension / longest
-    targetW = Math.round(targetW * scale)
-    targetH = Math.round(targetH * scale)
-  }
-
-  // 3) Try WEBP first, fallback to JPEG if not supported
-  let mime: 'image/webp' | 'image/jpeg' = 'image/webp'
-  if (!await canvasTypeSupported('image/webp')) {
-    mime = 'image/jpeg'
-  }
-
-  // 4) Iteratively compress
-  let quality = opts.startQuality
-  let iterations = 0
-  let blob: Blob | null = null
-
-  while (iterations < opts.maxIterations) {
-    const cvs = document.createElement('canvas')
-    cvs.width = targetW
-    cvs.height = targetH
-    const ctx = cvs.getContext('2d')
-    if (!ctx) throw new Error('Canvas 2D context not available')
-    ctx.drawImage(imgData.image, 0, 0, targetW, targetH)
-
-    blob = await canvasToBlob(cvs, mime, quality)
-
-    if (blob && blob.size <= opts.targetMaxBytes) {
-      break // success
-    }
-
-    // If quality can still drop, do that first
-    if (quality > opts.minQuality) {
-      quality = Math.max(opts.minQuality, quality - 0.1)
-    } else {
-      // Otherwise scale down further and retry
-      const newW = Math.round(targetW * opts.scaleStep)
-      const newH = Math.round(targetH * opts.scaleStep)
-      if (newW < 720 && newH < 720) {
-        // don’t shrink forever; accept current blob even if larger than target
-        break
-      }
-      targetW = newW
-      targetH = newH
-    }
-
-    iterations++
-  }
-
-  if (!blob) {
-    // As a last resort, upload original
-    return {
-      blob: file,
-      mime: file.type.startsWith('image/') ? (file.type as any) : 'image/jpeg',
-      ext: file.type === 'image/webp' ? 'webp' : 'jpg',
-      width: imgData.width,
-      height: imgData.height,
-    }
-  }
-
-  // If WEBP failed to produce data, fallback to JPEG once
-  if (blob.size === 0 && mime === 'image/webp') {
-    mime = 'image/jpeg'
-    const cvs = document.createElement('canvas')
-    cvs.width = targetW
-    cvs.height = targetH
-    const ctx = cvs.getContext('2d')
-    if (!ctx) throw new Error('Canvas 2D context not available')
-    ctx.drawImage(imgData.image, 0, 0, targetW, targetH)
-    const jpegBlob = await canvasToBlob(cvs, mime, quality)
-    if (jpegBlob) blob = jpegBlob
-  }
-
-  return {
-    blob,
-    mime,
-    ext: mime === 'image/webp' ? 'webp' : 'jpg',
-    width: targetW,
-    height: targetH,
-  }
-}
-
-async function canvasToBlob(canvas: HTMLCanvasElement, type: string, quality: number): Promise<Blob> {
-  return new Promise<Blob>((resolve, reject) => {
-    canvas.toBlob((b) => {
-      if (!b) return reject(new Error('Failed to create blob'))
-      resolve(b)
-    }, type, quality)
-  })
-}
-
-async function canvasTypeSupported(type: string): Promise<boolean> {
-  const c = document.createElement('canvas')
-  if (!('toDataURL' in c)) return false
-  const data = c.toDataURL(type)
-  return data.startsWith(`data:${type}`)
-}
-
-async function decodeImage(file: File): Promise<{ image: CanvasImageSource, width: number, height: number }> {
-  // Try ImageBitmap (fast, may auto-honor EXIF in some browsers)
-  try {
-    const bmp = await createImageBitmap(file)
-    return { image: bmp, width: bmp.width, height: bmp.height }
-  } catch {
-    // Fallback: HTMLImageElement
-    const url = URL.createObjectURL(file)
-    try {
-      const img = await loadHtmlImage(url)
-      return { image: img, width: img.naturalWidth, height: img.naturalHeight }
-    } finally {
-      URL.revokeObjectURL(url)
-    }
-  }
-}
-
-function loadHtmlImage(url: string): Promise<HTMLImageElement> {
-  return new Promise((resolve, reject) => {
-    const img = new Image()
-    img.onload = () => resolve(img)
-    img.onerror = (e) => reject(new Error('Failed to load image'))
-    img.src = url
-  })
 }
