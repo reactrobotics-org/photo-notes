@@ -2,7 +2,7 @@
 import { redirect } from 'next/navigation'
 import { cookies } from 'next/headers'
 import { createServerComponentClient } from '@supabase/auth-helpers-nextjs'
-import TeamsAdmin from '@/components/TeamsAdmin'
+import TeamsAdmin from '../../../components/TeamsAdmin' // ← relative import (no @)
 
 const ADMIN_EMAIL = 'dale@reactrobotics.org'
 
