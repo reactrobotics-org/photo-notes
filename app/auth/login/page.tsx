@@ -2,25 +2,37 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import Script from 'next/script'
 import { supabaseBrowser } from '@/lib/supabaseClient'
 
 const SITE_KEY = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY || ''
 
+function Divider() {
+  return (
+    <div className="flex items-center gap-3 my-1">
+      <div className="h-px flex-1 bg-neutral-200 dark:bg-neutral-700" />
+      <span className="text-xs uppercase tracking-wider opacity-70">or</span>
+      <div className="h-px flex-1 bg-neutral-200 dark:bg-neutral-700" />
+    </div>
+  )
+}
+
 export default function LoginPage() {
   const sb = supabaseBrowser()
   const router = useRouter()
+  const params = useSearchParams()
+  const next = params.get('next') || '/my'
 
+  // email/password state
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [token, setToken] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  // Turnstile
   const widgetRef = useRef<HTMLDivElement | null>(null)
-
-  // Render Turnstile widget after script loads
   useEffect(() => {
     const render = () => {
       // @ts-ignore
@@ -35,13 +47,21 @@ export default function LoginPage() {
         })
       }
     }
-    // if script already present
     render()
-    // re-render on visibility change (hot reload)
     document.addEventListener('visibilitychange', render, { once: true })
     return () => document.removeEventListener('visibilitychange', render)
   }, [])
 
+  // Google OAuth
+  const onGoogle = async () => {
+    const redirectTo = `${window.location.origin}/auth/callback?next=${encodeURIComponent(next)}`
+    await sb.auth.signInWithOAuth({
+      provider: 'google',
+      options: { redirectTo },
+    })
+  }
+
+  // Email + Password
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setError(null)
@@ -51,7 +71,7 @@ export default function LoginPage() {
 
     setLoading(true)
     try {
-      // Verify Turnstile server-side first
+      // Verify Turnstile server-side
       const verify = await fetch('/api/auth/turnstile', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -62,16 +82,14 @@ export default function LoginPage() {
         throw new Error(vr?.error || 'Verification failed')
       }
 
-      // Now sign in with Supabase
+      // Sign in (no signup flow)
       const { error: signErr } = await sb.auth.signInWithPassword({ email, password })
       if (signErr) throw new Error(signErr.message)
 
-      // go to home (or /my)
-      router.push('/my')
+      router.push(next)
       router.refresh()
     } catch (e: any) {
       setError(e?.message || 'Login failed')
-      // reset the widget
       // @ts-ignore
       (window as any).turnstile?.reset?.()
       setToken(null)
@@ -83,44 +101,60 @@ export default function LoginPage() {
   return (
     <main className="min-h-[70vh] grid place-items-center p-6">
       <Script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer />
-      <form onSubmit={onSubmit} className="w-full max-w-sm grid gap-4 border rounded-2xl p-5">
+      <div className="w-full max-w-sm grid gap-4 border rounded-2xl p-5">
         <h1 className="text-xl font-bold">Sign in</h1>
 
-        <label className="grid gap-1">
-          <span className="text-sm font-medium">Email</span>
-          <input
-            type="email"
-            autoComplete="username"
-            className="border rounded-xl px-3 py-2"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-          />
-        </label>
-
-        <label className="grid gap-1">
-          <span className="text-sm font-medium">Password</span>
-          <input
-            type="password"
-            autoComplete="current-password"
-            className="border rounded-xl px-3 py-2"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-          />
-        </label>
-
-        {/* Turnstile widget */}
-        <div ref={widgetRef} className="my-1" />
-
-        {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
-
+        {/* Google */}
         <button
-          type="submit"
-          disabled={loading}
-          className="border rounded-xl px-4 py-2 font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
+          onClick={onGoogle}
+          className="border rounded-xl px-4 py-2 font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800"
         >
-          {loading ? 'Signing in…' : 'Sign in'}
+          Continue with Google
         </button>
-      </form>
+
+        <Divider />
+
+        {/* Email + Password */}
+        <form onSubmit={onSubmit} className="grid gap-3">
+          <label className="grid gap-1">
+            <span className="text-sm font-medium">Email</span>
+            <input
+              type="email"
+              autoComplete="username"
+              className="border rounded-xl px-3 py-2"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+            />
+          </label>
+
+          <label className="grid gap-1">
+            <span className="text-sm font-medium">Password</span>
+            <input
+              type="password"
+              autoComplete="current-password"
+              className="border rounded-xl px-3 py-2"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+            />
+          </label>
+
+          {/* Turnstile widget (only for email+password) */}
+          <div ref={widgetRef} className="my-1" />
+
+          {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
+
+          <button
+            type="submit"
+            disabled={loading}
+            className="border rounded-xl px-4 py-2 font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-50"
+          >
+            {loading ? 'Signing in…' : 'Sign in'}
+          </button>
+          <p className="text-xs opacity-70">
+            No self-signup. If you need access or a password reset, contact the admin.
+          </p>
+        </form>
+      </div>
     </main>
   )
 }
