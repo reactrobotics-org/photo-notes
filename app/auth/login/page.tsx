@@ -1,10 +1,19 @@
-// app/(auth)/login/page.tsx
+// app/auth/login/page.tsx
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import Script from 'next/script'
 import { supabaseBrowser } from '@/lib/supabaseClient'
+
+declare global {
+  interface Window {
+    turnstile?: {
+      render: (el: HTMLElement, opts: Record<string, unknown>) => void
+      reset?: () => void
+    }
+  }
+}
 
 const SITE_KEY = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY || ''
 
@@ -31,26 +40,21 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  // Turnstile
+  // Turnstile widget mount point
   const widgetRef = useRef<HTMLDivElement | null>(null)
-  useEffect(() => {
-    const render = () => {
-      // @ts-ignore
-      if ((window as any).turnstile && widgetRef.current && SITE_KEY) {
-        // @ts-ignore
-        (window as any).turnstile.render(widgetRef.current, {
-          sitekey: SITE_KEY,
-          theme: 'auto',
-          callback: (t: string) => setToken(t),
-          'timeout-callback': () => setToken(null),
-          'error-callback': () => setToken(null),
-        })
-      }
+
+  // Render Turnstile when the script finishes loading
+  const onTurnstileLoad = () => {
+    if (window.turnstile && widgetRef.current && SITE_KEY) {
+      window.turnstile.render(widgetRef.current, {
+        sitekey: SITE_KEY,
+        theme: 'auto',
+        callback: (t: string) => setToken(t),
+        'timeout-callback': () => setToken(null),
+        'error-callback': () => setToken(null),
+      })
     }
-    render()
-    document.addEventListener('visibilitychange', render, { once: true })
-    return () => document.removeEventListener('visibilitychange', render)
-  }, [])
+  }
 
   // Google OAuth
   const onGoogle = async () => {
@@ -82,16 +86,16 @@ export default function LoginPage() {
         throw new Error(vr?.error || 'Verification failed')
       }
 
-      // Sign in (no signup flow)
+      // Sign in (no public signup)
       const { error: signErr } = await sb.auth.signInWithPassword({ email, password })
       if (signErr) throw new Error(signErr.message)
 
       router.push(next)
       router.refresh()
-    } catch (e: any) {
-      setError(e?.message || 'Login failed')
-      // @ts-ignore
-      (window as any).turnstile?.reset?.()
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Login failed'
+      setError(msg)
+      window.turnstile?.reset?.()
       setToken(null)
     } finally {
       setLoading(false)
@@ -100,7 +104,14 @@ export default function LoginPage() {
 
   return (
     <main className="min-h-[70vh] grid place-items-center p-6">
-      <Script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer />
+      {/* Turnstile script */}
+      <Script
+        src="https://challenges.cloudflare.com/turnstile/v0/api.js"
+        async
+        defer
+        onLoad={onTurnstileLoad}
+      />
+
       <div className="w-full max-w-sm grid gap-4 border rounded-2xl p-5">
         <h1 className="text-xl font-bold">Sign in</h1>
 
@@ -150,6 +161,7 @@ export default function LoginPage() {
           >
             {loading ? 'Signing in…' : 'Sign in'}
           </button>
+
           <p className="text-xs opacity-70">
             No self-signup. If you need access or a password reset, contact the admin.
           </p>
